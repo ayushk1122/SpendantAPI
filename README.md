@@ -78,11 +78,15 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-Create a mock Plaid link token:
+Create a Plaid link token:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/plaid/create-link-token
+curl -X POST http://127.0.0.1:8000/api/plaid/create-link-token \
+  -H "Content-Type: application/json" \
+  -d '{"client_user_id":"local-user"}'
 ```
+
+This endpoint calls Plaid and requires valid Plaid sandbox credentials in `.env`.
 
 Exchange a mock public token:
 
@@ -124,7 +128,8 @@ Implemented:
 
 - FastAPI app initialization
 - `GET /health`
-- Plaid route stubs
+- Real Plaid link token creation
+- Mock Plaid exchange, accounts, transactions, and balances endpoints
 - Plaid service boundary
 - Environment-based configuration
 - Local setup documentation

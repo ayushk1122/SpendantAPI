@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import ConfigurationError
 from app.routes import health, plaid
+from app.services.plaid_service import ExternalServiceError
 
 
 app = FastAPI(
@@ -22,5 +23,16 @@ async def configuration_error_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=500,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(ExternalServiceError)
+async def external_service_error_handler(
+    request: Request,
+    exc: ExternalServiceError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=502,
         content={"detail": str(exc)},
     )
