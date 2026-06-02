@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     plaid_client_id: str = Field(..., alias="PLAID_CLIENT_ID")
     plaid_secret: str = Field(..., alias="PLAID_SECRET")
     plaid_env: Literal["sandbox", "development", "production"] = Field(..., alias="PLAID_ENV")
+    plaid_storage_path: str = Field(default="data/plaid.sqlite3", alias="PLAID_STORAGE_PATH")
 
     model_config = SettingsConfigDict(
         env_file=".env",

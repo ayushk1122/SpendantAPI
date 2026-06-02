@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 
 from app.schemas.plaid import (
     AccountsResponse,
@@ -24,7 +24,7 @@ def create_link_token(
 
 @router.post("/exchange-public-token")
 def exchange_public_token(
-    request: ExchangePublicTokenRequest | None = Body(default=None),
+    request: ExchangePublicTokenRequest,
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> ExchangePublicTokenResponse:
     return plaid_service.exchange_public_token(request)
@@ -32,20 +32,23 @@ def exchange_public_token(
 
 @router.get("/accounts")
 def get_accounts(
+    client_user_id: str = Query(default="spendant-local-user"),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> AccountsResponse:
-    return plaid_service.get_accounts()
+    return plaid_service.get_accounts(client_user_id)
 
 
 @router.get("/transactions")
 def get_transactions(
+    client_user_id: str = Query(default="spendant-local-user"),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> TransactionsResponse:
-    return plaid_service.get_transactions()
+    return plaid_service.get_transactions(client_user_id)
 
 
 @router.get("/balances")
 def get_balances(
+    client_user_id: str = Query(default="spendant-local-user"),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> BalancesResponse:
-    return plaid_service.get_balances()
+    return plaid_service.get_balances(client_user_id)

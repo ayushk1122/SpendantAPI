@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import ConfigurationError
 from app.routes import health, plaid
-from app.services.plaid_service import ExternalServiceError
+from app.services.plaid_service import ExternalServiceError, PlaidItemNotFoundError
 
 
 app = FastAPI(
@@ -34,5 +34,16 @@ async def external_service_error_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=502,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(PlaidItemNotFoundError)
+async def plaid_item_not_found_error_handler(
+    request: Request,
+    exc: PlaidItemNotFoundError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
         content={"detail": str(exc)},
     )
