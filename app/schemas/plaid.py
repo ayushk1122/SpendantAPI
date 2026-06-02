@@ -37,6 +37,7 @@ class CreateLinkTokenResponse(BaseModel):
 
 class ExchangePublicTokenRequest(BaseModel):
     public_token: str
+    client_user_id: str = Field(default="spendant-local-user")
 
 
 class ExchangePublicTokenResponse(BaseModel):
@@ -44,41 +45,55 @@ class ExchangePublicTokenResponse(BaseModel):
     item_id: str
     environment: str
     mock: bool = True
+    request_id: str | None = None
 
 
 class PlaidAccount(BaseModel):
     account_id: str
     name: str
     type: str
-    subtype: str
-    balance: float
+    subtype: str | None = None
+    balance: float | None = None
+    available_balance: float | None = None
+    iso_currency_code: str | None = None
 
 
 class AccountsResponse(BaseModel):
     accounts: list[PlaidAccount]
     mock: bool = True
+    request_id: str | None = None
 
 
 class PlaidTransaction(BaseModel):
     transaction_id: str
+    account_id: str
     name: str
     amount: float
     date: str
-    category: list[str]
+    category: list[str] | None = None
+    merchant_name: str | None = None
+    pending: bool = False
+    iso_currency_code: str | None = None
 
 
 class TransactionsResponse(BaseModel):
     transactions: list[PlaidTransaction]
     mock: bool = True
+    added_count: int = 0
+    modified_count: int = 0
+    removed_count: int = 0
+    next_cursor: str | None = None
+    request_id: str | None = None
 
 
 class PlaidBalance(BaseModel):
     account_id: str
-    available: float
-    current: float
-    iso_currency_code: str
+    available: float | None = None
+    current: float | None = None
+    iso_currency_code: str | None = None
 
 
 class BalancesResponse(BaseModel):
     balances: list[PlaidBalance]
     mock: bool = True
+    request_id: str | None = None
