@@ -70,6 +70,9 @@ class PlaidTransaction(BaseModel):
     name: str
     amount: float
     date: str
+    plaid_primary_category: str | None = None
+    plaid_detailed_category: str | None = None
+    plaid_category_confidence: str | None = None
     category: list[str] | None = None
     merchant_name: str | None = None
     pending: bool = False

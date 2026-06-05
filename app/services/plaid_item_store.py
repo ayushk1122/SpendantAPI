@@ -82,6 +82,25 @@ class PlaidItemStore:
                 (cursor, now, client_user_id),
             )
 
+    def reset_transaction_sync(self, client_user_id: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM plaid_transactions
+                WHERE client_user_id = ?
+                """,
+                (client_user_id,),
+            )
+            connection.execute(
+                """
+                UPDATE plaid_items
+                SET transactions_cursor = NULL, updated_at = ?
+                WHERE client_user_id = ?
+                """,
+                (now, client_user_id),
+            )
+
     def save_transaction_sync(
         self,
         client_user_id: str,
@@ -102,18 +121,24 @@ class PlaidItemStore:
                         name,
                         amount,
                         date,
+                        plaid_primary_category,
+                        plaid_detailed_category,
+                        plaid_category_confidence,
                         category_json,
                         merchant_name,
                         pending,
                         iso_currency_code,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(transaction_id) DO UPDATE SET
                         account_id = excluded.account_id,
                         name = excluded.name,
                         amount = excluded.amount,
                         date = excluded.date,
+                        plaid_primary_category = excluded.plaid_primary_category,
+                        plaid_detailed_category = excluded.plaid_detailed_category,
+                        plaid_category_confidence = excluded.plaid_category_confidence,
                         category_json = excluded.category_json,
                         merchant_name = excluded.merchant_name,
                         pending = excluded.pending,
@@ -127,6 +152,9 @@ class PlaidItemStore:
                         transaction["name"],
                         transaction["amount"],
                         transaction["date"],
+                        transaction.get("plaid_primary_category"),
+                        transaction.get("plaid_detailed_category"),
+                        transaction.get("plaid_category_confidence"),
                         json.dumps(transaction.get("category")),
                         transaction.get("merchant_name"),
                         int(transaction.get("pending", False)),
@@ -163,6 +191,9 @@ class PlaidItemStore:
                     name,
                     amount,
                     date,
+                    plaid_primary_category,
+                    plaid_detailed_category,
+                    plaid_category_confidence,
                     category_json,
                     merchant_name,
                     pending,
@@ -181,6 +212,9 @@ class PlaidItemStore:
                 "name": row["name"],
                 "amount": row["amount"],
                 "date": row["date"],
+                "plaid_primary_category": row["plaid_primary_category"],
+                "plaid_detailed_category": row["plaid_detailed_category"],
+                "plaid_category_confidence": row["plaid_category_confidence"],
                 "category": json.loads(row["category_json"]),
                 "merchant_name": row["merchant_name"],
                 "pending": bool(row["pending"]),
@@ -212,6 +246,9 @@ class PlaidItemStore:
                     name TEXT NOT NULL,
                     amount REAL NOT NULL,
                     date TEXT NOT NULL,
+                    plaid_primary_category TEXT,
+                    plaid_detailed_category TEXT,
+                    plaid_category_confidence TEXT,
                     category_json TEXT NOT NULL,
                     merchant_name TEXT,
                     pending INTEGER NOT NULL,
@@ -226,8 +263,42 @@ class PlaidItemStore:
                 ON plaid_transactions(client_user_id)
                 """
             )
+            self._ensure_column(
+                connection,
+                "plaid_transactions",
+                "plaid_primary_category",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "plaid_transactions",
+                "plaid_detailed_category",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "plaid_transactions",
+                "plaid_category_confidence",
+                "TEXT",
+            )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.storage_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    def _ensure_column(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_type: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+            )

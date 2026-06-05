@@ -122,6 +122,40 @@ Get balances:
 curl "http://127.0.0.1:8000/api/plaid/balances?client_user_id=local-user"
 ```
 
+Get dashboard summary:
+
+```bash
+curl "http://127.0.0.1:8000/api/dashboard/summary?client_user_id=spendant-local-user"
+```
+
+The dashboard summary uses Plaid `personal_finance_category` primary and detailed
+values for classification. The older Plaid `category` field is kept only as a
+fallback for older locally cached transactions.
+
+The backend explicitly requests Plaid Personal Finance Categories v2 from
+`/transactions/sync` and maps Plaid categories into Spendant buckets:
+
+- `INCOME`
+- `HOUSING`
+- `EXPENSES`
+- `SUBSCRIPTIONS`
+- `TRANSFER`
+- `IGNORE`
+
+The classifier covers the Plaid Personal Finance Category taxonomy at the
+detailed-category level where the Spendant bucket needs special treatment. For
+example, rent, utilities, and mortgage payments map to `HOUSING`; account
+movement and credit card payments map to `TRANSFER`; and normal spending maps
+to `EXPENSES`. Merchant/name fallbacks are still used for subscriptions because
+Plaid's transaction taxonomy does not represent every subscription as a unique
+category.
+
+When Plaid Recurring Transactions access is available, the dashboard also calls
+`/transactions/recurring/get` and uses active recurring outflow streams to improve
+subscription and bill detection. If recurring access is not enabled for the Plaid
+account, the dashboard logs a warning and falls back to transaction-level PFC
+classification.
+
 ## Smoke Test Plaid Endpoints
 
 Start the API:
@@ -145,6 +179,19 @@ python scripts/smoke_plaid.py --create-sandbox-token
 The full smoke test creates a sandbox public token directly through Plaid,
 exchanges it through this API, then fetches accounts, balances, and transactions.
 
+After linking a Plaid item, smoke test the dashboard endpoint:
+
+```bash
+python scripts/smoke_dashboard.py --client-user-id spendant-local-user
+```
+
+To clear locally cached transactions and force a fresh Plaid sync on the next
+transaction or dashboard request:
+
+```bash
+python scripts/reset_transaction_cache.py --client-user-id spendant-local-user
+```
+
 ## Environment Errors
 
 The Plaid endpoints require:
@@ -165,6 +212,8 @@ Implemented:
 - Real Plaid public token exchange
 - Local SQLite storage for linked Plaid Items
 - Real Plaid accounts, balances, and transaction sync endpoints
+- Dashboard summary endpoint with rule-based Spendant buckets
+- Plaid personal finance category storage for synced transactions
 - Plaid service boundary
 - Environment-based configuration
 - Local setup documentation

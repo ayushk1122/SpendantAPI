@@ -9,8 +9,14 @@ from plaid.model.country_code import CountryCode
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.personal_finance_category_version import PersonalFinanceCategoryVersion
 from plaid.model.products import Products
+from plaid.model.transactions_recurring_get_request import TransactionsRecurringGetRequest
+from plaid.model.transactions_recurring_get_request_options import (
+    TransactionsRecurringGetRequestOptions,
+)
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.transactions_sync_request_options import TransactionsSyncRequestOptions
 
 from app.config import Settings, get_settings
 from app.schemas.plaid import (
@@ -125,6 +131,10 @@ class PlaidService:
             request_kwargs = {
                 "access_token": item.access_token,
                 "count": 500,
+                "options": TransactionsSyncRequestOptions(
+                    include_personal_finance_category=True,
+                    personal_finance_category_version=PersonalFinanceCategoryVersion("v2"),
+                ),
             }
             if next_cursor:
                 request_kwargs["cursor"] = next_cursor
@@ -167,6 +177,26 @@ class PlaidService:
             next_cursor=next_cursor,
             request_id=request_id,
         )
+
+    def get_recurring_transactions(self, client_user_id: str) -> dict:
+        item = self._get_item(client_user_id)
+
+        try:
+            response = self.client.transactions_recurring_get(
+                TransactionsRecurringGetRequest(
+                    access_token=item.access_token,
+                    options=TransactionsRecurringGetRequestOptions(
+                        include_personal_finance_category=True,
+                        personal_finance_category_version=PersonalFinanceCategoryVersion("v2"),
+                    ),
+                )
+            ).to_dict()
+        except ApiException as exc:
+            raise ExternalServiceError(
+                f"Plaid recurring transactions fetch failed: {self._format_plaid_error(exc)}"
+            ) from exc
+
+        return response
 
     def get_balances(self, client_user_id: str) -> BalancesResponse:
         item = self._get_item(client_user_id)
@@ -219,12 +249,16 @@ class PlaidService:
         }
 
     def _map_transaction(self, transaction: dict) -> dict:
+        personal_finance_category = transaction.get("personal_finance_category") or {}
         return {
             "transaction_id": transaction["transaction_id"],
             "account_id": transaction["account_id"],
             "name": transaction["name"],
             "amount": transaction["amount"],
             "date": str(transaction["date"]),
+            "plaid_primary_category": personal_finance_category.get("primary"),
+            "plaid_detailed_category": personal_finance_category.get("detailed"),
+            "plaid_category_confidence": personal_finance_category.get("confidence_level"),
             "category": transaction.get("category"),
             "merchant_name": transaction.get("merchant_name"),
             "pending": transaction.get("pending", False),
