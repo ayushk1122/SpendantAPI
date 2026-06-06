@@ -102,13 +102,31 @@ curl -X POST http://127.0.0.1:8000/api/plaid/exchange-public-token \
 ```
 
 This stores the returned Plaid access token in local SQLite storage for later account,
-balance, and transaction calls.
+balance, and transaction calls. You can optionally pass `institution_id` and
+`institution_name` from the Plaid Link success callback; otherwise the backend
+resolves institution metadata from Plaid.
+
+List linked institutions:
+
+```bash
+curl "http://127.0.0.1:8000/api/plaid/items?client_user_id=local-user"
+```
+
+Disconnect one linked institution:
+
+```bash
+curl -X DELETE "http://127.0.0.1:8000/api/plaid/items/{item_id}?client_user_id=local-user"
+```
 
 Get accounts:
 
 ```bash
 curl "http://127.0.0.1:8000/api/plaid/accounts?client_user_id=local-user"
 ```
+
+The accounts response includes both a flat `accounts` list and an `institutions`
+array grouped by linked bank. Each account and balance also includes
+`item_id`, `institution_id`, and `institution_name` when available.
 
 Sync transactions:
 
@@ -176,8 +194,14 @@ Run the full Plaid sandbox smoke test without the iOS app:
 python scripts/smoke_plaid.py --create-sandbox-token
 ```
 
+Test linking two sandbox institutions for the same user:
+
+```bash
+python scripts/smoke_plaid.py --create-sandbox-token --link-second-institution
+```
+
 The full smoke test creates a sandbox public token directly through Plaid,
-exchanges it through this API, then fetches accounts, balances, and transactions.
+exchanges it through this API, then fetches items, accounts, balances, and transactions.
 
 After linking a Plaid item, smoke test the dashboard endpoint:
 
@@ -190,6 +214,12 @@ transaction or dashboard request:
 
 ```bash
 python scripts/reset_transaction_cache.py --client-user-id spendant-local-user
+```
+
+Reset cache for one linked institution only:
+
+```bash
+python scripts/reset_transaction_cache.py --client-user-id spendant-local-user --item-id ITEM_ID
 ```
 
 ## Environment Errors
@@ -212,6 +242,7 @@ Implemented:
 - Real Plaid public token exchange
 - Local SQLite storage for linked Plaid Items
 - Real Plaid accounts, balances, and transaction sync endpoints
+- Multi-bank support: multiple Plaid Items per user with institution metadata
 - Dashboard summary endpoint with rule-based Spendant buckets
 - Plaid personal finance category storage for synced transactions
 - Plaid service boundary

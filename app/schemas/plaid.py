@@ -14,18 +14,6 @@ class CreateLinkTokenRequest(BaseModel):
     products: list[PlaidProduct] = Field(default_factory=lambda: ["transactions"])
     country_codes: list[PlaidCountryCode] = Field(default_factory=lambda: ["US"])
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "client_user_id": "local-user",
-                "client_name": "Spendant",
-                "language": "en",
-                "products": ["transactions"],
-                "country_codes": ["US"],
-            }
-        }
-    }
-
 
 class CreateLinkTokenResponse(BaseModel):
     link_token: str
@@ -38,19 +26,39 @@ class CreateLinkTokenResponse(BaseModel):
 class ExchangePublicTokenRequest(BaseModel):
     public_token: str
     client_user_id: str = Field(default="spendant-local-user")
+    institution_id: str | None = None
+    institution_name: str | None = None
 
 
 class ExchangePublicTokenResponse(BaseModel):
     access_token: str
     item_id: str
+    institution_id: str | None = None
+    institution_name: str | None = None
     environment: str
     mock: bool = True
     request_id: str | None = None
 
 
+class PlaidItemSummary(BaseModel):
+    item_id: str
+    institution_id: str | None = None
+    institution_name: str | None = None
+    account_count: int = 0
+
+
+class PlaidItemsResponse(BaseModel):
+    items: list[PlaidItemSummary]
+    mock: bool = False
+
+
 class PlaidAccount(BaseModel):
     account_id: str
+    item_id: str | None = None
+    institution_id: str | None = None
+    institution_name: str | None = None
     name: str
+    official_name: str | None = None
     type: str
     subtype: str | None = None
     balance: float | None = None
@@ -58,14 +66,23 @@ class PlaidAccount(BaseModel):
     iso_currency_code: str | None = None
 
 
+class PlaidInstitutionAccounts(BaseModel):
+    item_id: str
+    institution_id: str | None = None
+    institution_name: str | None = None
+    accounts: list[PlaidAccount]
+
+
 class AccountsResponse(BaseModel):
     accounts: list[PlaidAccount]
+    institutions: list[PlaidInstitutionAccounts] = []
     mock: bool = True
     request_id: str | None = None
 
 
 class PlaidTransaction(BaseModel):
     transaction_id: str
+    item_id: str | None = None
     account_id: str
     name: str
     amount: float
@@ -91,6 +108,9 @@ class TransactionsResponse(BaseModel):
 
 class PlaidBalance(BaseModel):
     account_id: str
+    item_id: str | None = None
+    institution_id: str | None = None
+    institution_name: str | None = None
     available: float | None = None
     current: float | None = None
     iso_currency_code: str | None = None

@@ -205,16 +205,17 @@ def get_dashboard_service(settings: Settings = Depends(get_settings)) -> Dashboa
 
 
 def _find_checking_balance(accounts: list[dict]) -> float:
+    total = 0.0
     for account in accounts:
         if account.get("type") == "depository" and account.get("subtype") == "checking":
-            return float(
+            total += float(
                 account.get("balance")
                 or account.get("current")
                 or account.get("available_balance")
                 or 0
             )
 
-    return 0.0
+    return round(total, 2)
 
 
 def _is_current_month(value: str | None) -> bool:
