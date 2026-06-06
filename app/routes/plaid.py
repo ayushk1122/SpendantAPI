@@ -7,6 +7,7 @@ from app.schemas.plaid import (
     CreateLinkTokenResponse,
     ExchangePublicTokenRequest,
     ExchangePublicTokenResponse,
+    PlaidItemsResponse,
     TransactionsResponse,
 )
 from app.services.plaid_service import PlaidService, get_plaid_service
@@ -28,6 +29,24 @@ def exchange_public_token(
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> ExchangePublicTokenResponse:
     return plaid_service.exchange_public_token(request)
+
+
+@router.get("/items")
+def get_items(
+    client_user_id: str = Query(default="spendant-local-user"),
+    plaid_service: PlaidService = Depends(get_plaid_service),
+) -> PlaidItemsResponse:
+    return plaid_service.get_items(client_user_id)
+
+
+@router.delete("/items/{item_id}")
+def delete_item(
+    item_id: str,
+    client_user_id: str = Query(default="spendant-local-user"),
+    plaid_service: PlaidService = Depends(get_plaid_service),
+) -> dict[str, str]:
+    plaid_service.delete_item(client_user_id, item_id)
+    return {"status": "deleted", "item_id": item_id}
 
 
 @router.get("/accounts")

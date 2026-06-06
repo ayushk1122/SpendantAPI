@@ -102,13 +102,31 @@ curl -X POST http://127.0.0.1:8000/api/plaid/exchange-public-token \
 ```
 
 This stores the returned Plaid access token in local SQLite storage for later account,
-balance, and transaction calls.
+balance, and transaction calls. You can optionally pass `institution_id` and
+`institution_name` from the Plaid Link success callback; otherwise the backend
+resolves institution metadata from Plaid.
+
+List linked institutions:
+
+```bash
+curl "http://127.0.0.1:8000/api/plaid/items?client_user_id=local-user"
+```
+
+Disconnect one linked institution:
+
+```bash
+curl -X DELETE "http://127.0.0.1:8000/api/plaid/items/{item_id}?client_user_id=local-user"
+```
 
 Get accounts:
 
 ```bash
 curl "http://127.0.0.1:8000/api/plaid/accounts?client_user_id=local-user"
 ```
+
+The accounts response includes both a flat `accounts` list and an `institutions`
+array grouped by linked bank. Each account and balance also includes
+`item_id`, `institution_id`, and `institution_name` when available.
 
 Sync transactions:
 
@@ -121,6 +139,40 @@ Get balances:
 ```bash
 curl "http://127.0.0.1:8000/api/plaid/balances?client_user_id=local-user"
 ```
+
+Get dashboard summary:
+
+```bash
+curl "http://127.0.0.1:8000/api/dashboard/summary?client_user_id=spendant-local-user"
+```
+
+The dashboard summary uses Plaid `personal_finance_category` primary and detailed
+values for classification. The older Plaid `category` field is kept only as a
+fallback for older locally cached transactions.
+
+The backend explicitly requests Plaid Personal Finance Categories v2 from
+`/transactions/sync` and maps Plaid categories into Spendant buckets:
+
+- `INCOME`
+- `HOUSING`
+- `EXPENSES`
+- `SUBSCRIPTIONS`
+- `TRANSFER`
+- `IGNORE`
+
+The classifier covers the Plaid Personal Finance Category taxonomy at the
+detailed-category level where the Spendant bucket needs special treatment. For
+example, rent, utilities, and mortgage payments map to `HOUSING`; account
+movement and credit card payments map to `TRANSFER`; and normal spending maps
+to `EXPENSES`. Merchant/name fallbacks are still used for subscriptions because
+Plaid's transaction taxonomy does not represent every subscription as a unique
+category.
+
+When Plaid Recurring Transactions access is available, the dashboard also calls
+`/transactions/recurring/get` and uses active recurring outflow streams to improve
+subscription and bill detection. If recurring access is not enabled for the Plaid
+account, the dashboard logs a warning and falls back to transaction-level PFC
+classification.
 
 ## Smoke Test Plaid Endpoints
 
@@ -142,8 +194,33 @@ Run the full Plaid sandbox smoke test without the iOS app:
 python scripts/smoke_plaid.py --create-sandbox-token
 ```
 
+Test linking two sandbox institutions for the same user:
+
+```bash
+python scripts/smoke_plaid.py --create-sandbox-token --link-second-institution
+```
+
 The full smoke test creates a sandbox public token directly through Plaid,
-exchanges it through this API, then fetches accounts, balances, and transactions.
+exchanges it through this API, then fetches items, accounts, balances, and transactions.
+
+After linking a Plaid item, smoke test the dashboard endpoint:
+
+```bash
+python scripts/smoke_dashboard.py --client-user-id spendant-local-user
+```
+
+To clear locally cached transactions and force a fresh Plaid sync on the next
+transaction or dashboard request:
+
+```bash
+python scripts/reset_transaction_cache.py --client-user-id spendant-local-user
+```
+
+Reset cache for one linked institution only:
+
+```bash
+python scripts/reset_transaction_cache.py --client-user-id spendant-local-user --item-id ITEM_ID
+```
 
 ## Environment Errors
 
@@ -165,6 +242,9 @@ Implemented:
 - Real Plaid public token exchange
 - Local SQLite storage for linked Plaid Items
 - Real Plaid accounts, balances, and transaction sync endpoints
+- Multi-bank support: multiple Plaid Items per user with institution metadata
+- Dashboard summary endpoint with rule-based Spendant buckets
+- Plaid personal finance category storage for synced transactions
 - Plaid service boundary
 - Environment-based configuration
 - Local setup documentation

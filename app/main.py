@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.config import ConfigurationError
-from app.routes import health, plaid
+from app.routes import dashboard, health, plaid
 from app.services.plaid_service import ExternalServiceError, PlaidItemNotFoundError
 
 
@@ -14,6 +14,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(plaid.router, prefix="/api/plaid", tags=["plaid"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 
 
 @app.exception_handler(ConfigurationError)

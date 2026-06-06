@@ -25,8 +25,18 @@ def main() -> int:
         action="store_true",
         help="Create a Plaid sandbox public token and test the full exchange/read flow.",
     )
+    parser.add_argument(
+        "--link-second-institution",
+        action="store_true",
+        help="After the first sandbox link, link a second institution to verify multi-bank support.",
+    )
     parser.add_argument("--public-token", help="Use an existing Plaid public token.")
     parser.add_argument("--institution-id", default="ins_109508")
+    parser.add_argument(
+        "--second-institution-id",
+        default="ins_109509",
+        help="Sandbox institution to link when --link-second-institution is set.",
+    )
     args = parser.parse_args()
 
     public_token = args.public_token
@@ -57,9 +67,39 @@ def main() -> int:
     )
     check("exchange public token", exchange, required=["access_token", "item_id"])
 
+    if args.link_second_institution:
+        second_token = create_sandbox_public_token(args.second_institution_id)
+        print("created second sandbox public token")
+        second_exchange = request_json(
+            "POST",
+            f"{args.base_url}/api/plaid/exchange-public-token",
+            {
+                "public_token": second_token,
+                "client_user_id": args.client_user_id,
+            },
+        )
+        check(
+            "exchange second public token",
+            second_exchange,
+            required=["access_token", "item_id"],
+        )
+        if second_exchange["item_id"] == exchange["item_id"]:
+            raise RuntimeError("second institution exchange returned the same item_id")
+
     query = urlencode({"client_user_id": args.client_user_id})
+    items = request_json("GET", f"{args.base_url}/api/plaid/items?{query}")
+    check("items", items, required=["items"])
+    if args.link_second_institution and len(items["items"]) < 2:
+        raise RuntimeError(
+            f"expected at least 2 linked items, got {len(items['items'])}"
+        )
+
     accounts = request_json("GET", f"{args.base_url}/api/plaid/accounts?{query}")
-    check("accounts", accounts, required=["accounts"])
+    check("accounts", accounts, required=["accounts", "institutions"])
+    if args.link_second_institution and len(accounts["institutions"]) < 2:
+        raise RuntimeError(
+            "expected accounts grouped across at least 2 institutions"
+        )
 
     balances = request_json("GET", f"{args.base_url}/api/plaid/balances?{query}")
     check("balances", balances, required=["balances"])
@@ -84,7 +124,7 @@ def create_sandbox_public_token(institution_id: str) -> str:
     response = client.sandbox_public_token_create(
         SandboxPublicTokenCreateRequest(
             institution_id=institution_id,
-            initial_products=[Products("transactions")],
+            initial_products=[Products("transactions"), Products("liabilities")],
         )
     ).to_dict()
     return response["public_token"]
