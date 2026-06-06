@@ -9,6 +9,7 @@ from plaid.model.country_code import CountryCode
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.liabilities_get_request import LiabilitiesGetRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.personal_finance_category_version import PersonalFinanceCategoryVersion
@@ -31,6 +32,8 @@ from app.schemas.plaid import (
     PlaidAccount,
     PlaidBalance,
     PlaidInstitutionAccounts,
+    LiabilitiesResponse,
+    PlaidCreditCardLiability,
     PlaidItemSummary,
     PlaidItemsResponse,
     PlaidTransaction,
@@ -254,6 +257,81 @@ class PlaidService:
             "outflow_streams": combined_outflow_streams,
             "inflow_streams": combined_inflow_streams,
         }
+
+    def get_liabilities(self, client_user_id: str) -> LiabilitiesResponse:
+        items = self._get_items(client_user_id)
+        credit_cards: list[PlaidCreditCardLiability] = []
+        request_id = None
+        account_names: dict[str, str] = {}
+        account_balances: dict[str, float | None] = {}
+
+        for item in items:
+            try:
+                accounts_response = self.client.accounts_get(
+                    AccountsGetRequest(access_token=item.access_token)
+                ).to_dict()
+            except ApiException:
+                accounts_response = {"accounts": []}
+
+            for account in accounts_response.get("accounts", []):
+                account_id = account["account_id"]
+                account_names[account_id] = account.get("name") or account.get("official_name") or "Credit Card"
+                balances = account.get("balances") or {}
+                account_balances[account_id] = balances.get("current")
+
+            try:
+                response = self.client.liabilities_get(
+                    LiabilitiesGetRequest(access_token=item.access_token)
+                ).to_dict()
+            except ApiException as exc:
+                error_text = self._format_plaid_error(exc)
+                if any(
+                    marker in error_text
+                    for marker in (
+                        "PRODUCT_NOT_READY",
+                        "INVALID_PRODUCT",
+                        "NO_LIABILITY_ACCOUNTS",
+                        "PRODUCTS_NOT_SUPPORTED",
+                    )
+                ):
+                    continue
+                raise ExternalServiceError(
+                    f"Plaid liabilities fetch failed: {error_text}"
+                ) from exc
+
+            request_id = response.get("request_id")
+            for liability in response.get("credit", []) or []:
+                account_id = liability.get("account_id")
+                if not account_id:
+                    continue
+
+                credit_cards.append(
+                    PlaidCreditCardLiability(
+                        account_id=account_id,
+                        item_id=item.item_id,
+                        institution_id=item.institution_id,
+                        institution_name=item.institution_name,
+                        account_name=account_names.get(account_id),
+                        current_balance=account_balances.get(account_id),
+                        last_statement_balance=liability.get("last_statement_balance"),
+                        minimum_payment_amount=liability.get("minimum_payment_amount"),
+                        next_payment_due_date=self._stringify(
+                            liability.get("next_payment_due_date")
+                        ),
+                        last_statement_issue_date=self._stringify(
+                            liability.get("last_statement_issue_date")
+                        ),
+                        last_payment_amount=liability.get("last_payment_amount"),
+                        last_payment_date=self._stringify(liability.get("last_payment_date")),
+                        is_overdue=liability.get("is_overdue", False),
+                    )
+                )
+
+        return LiabilitiesResponse(
+            credit_cards=credit_cards,
+            mock=False,
+            request_id=request_id,
+        )
 
     def get_balances(self, client_user_id: str) -> BalancesResponse:
         items = self._get_items(client_user_id)

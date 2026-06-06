@@ -124,7 +124,7 @@ def create_sandbox_public_token(institution_id: str) -> str:
     response = client.sandbox_public_token_create(
         SandboxPublicTokenCreateRequest(
             institution_id=institution_id,
-            initial_products=[Products("transactions")],
+            initial_products=[Products("transactions"), Products("liabilities")],
         )
     ).to_dict()
     return response["public_token"]

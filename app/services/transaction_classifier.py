@@ -32,16 +32,18 @@ HOUSING_KEYWORDS: Final = {
 SUBSCRIPTION_KEYWORDS: Final = {
     "netflix",
     "spotify",
-    "apple",
-    "icloud",
-    "youtube",
+    "hulu",
+    "disney+",
+    "disney plus",
+    "youtube premium",
     "openai",
     "chatgpt",
-    "hulu",
-    "disney",
-    "gym",
-    "membership",
-    "subscription",
+    "icloud storage",
+    "apple music",
+    "amazon prime",
+    "adobe",
+    "dropbox",
+    "gym membership",
 }
 
 TRANSFER_CATEGORY_KEYWORDS: Final = {
@@ -49,6 +51,8 @@ TRANSFER_CATEGORY_KEYWORDS: Final = {
     "loan payment",
     "credit card payment",
     "bank transfer",
+    "payment thank you",
+    "autopay",
 }
 
 PLAID_INCOME_PRIMARY: Final = {
@@ -191,14 +195,11 @@ PLAID_EXPENSE_PRIMARY: Final = {
 
 
 def classify_transaction(transaction: dict) -> str:
-    text = _searchable_text(transaction)
-
-    if _contains_keyword(text, SUBSCRIPTION_KEYWORDS):
-        return SUBSCRIPTIONS
-
     plaid_bucket = _bucket_from_plaid_categories(transaction)
     if plaid_bucket:
         return plaid_bucket
+
+    text = _searchable_text(transaction)
 
     if _looks_like_transfer(transaction, text):
         return TRANSFER
@@ -213,6 +214,14 @@ def classify_transaction(transaction: dict) -> str:
         return SUBSCRIPTIONS
 
     return EXPENSES
+
+
+def is_subscription_like(transaction: dict) -> bool:
+    detailed = _category_code(transaction.get("plaid_detailed_category"))
+    if detailed in PLAID_SUBSCRIPTION_LIKE_DETAILED:
+        return True
+
+    return classify_transaction(transaction) == SUBSCRIPTIONS
 
 
 def _bucket_from_plaid_categories(transaction: dict) -> str | None:
