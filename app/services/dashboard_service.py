@@ -9,10 +9,15 @@ from app.services.case_study_user import get_case_study_dashboard
 from app.schemas.plaid import PlaidCreditCardLiability
 from app.schemas.dashboard import (
     DashboardSummaryResponse,
+    MoneyDestinationSnapshot,
     NormalizedTransaction,
     RecurringStream,
 )
-from app.services.cashflow_timeline import build_cashflow_timeline
+from app.services.cashflow_timeline import (
+    build_cashflow_timeline,
+    build_historical_timeline,
+)
+from app.services.dashboard_snapshot_store import DashboardSnapshotStore
 from app.services.plaid_service import ExternalServiceError, PlaidItemNotFoundError, PlaidService
 from app.services.transaction_classifier import (
     EXPENSES,
@@ -32,17 +37,99 @@ UPCOMING_RECURRING_BUCKETS = {SUBSCRIPTIONS, HOUSING, INCOME, TRANSFER}
 
 
 class DashboardService:
-    def __init__(self, plaid_service: PlaidService) -> None:
+    def __init__(
+        self,
+        plaid_service: PlaidService,
+        snapshot_store: DashboardSnapshotStore,
+    ) -> None:
         self.plaid_service = plaid_service
+        self.snapshot_store = snapshot_store
 
     def get_dashboard_summary(
         self,
         client_user_id: str,
         protected_balance: float | None = None,
+        month: str | None = None,
+    ) -> DashboardSummaryResponse:
+        month_year, month_month, month_value, is_historical = _parse_dashboard_month(
+            month
+        )
+        if is_historical:
+            snapshot = self.snapshot_store.get_snapshot(
+                client_user_id=client_user_id,
+                month=month_value,
+            )
+            if snapshot:
+                logger.info(
+                    "dashboard snapshot hit client_user_id=%s month=%s",
+                    client_user_id,
+                    month_value,
+                )
+                return snapshot
+
+        return self._build_dashboard_summary(
+            client_user_id=client_user_id,
+            protected_balance=protected_balance,
+            month_year=month_year,
+            month_month=month_month,
+            month_value=month_value,
+            is_historical=is_historical,
+        )
+
+    def finalize_month_snapshot(
+        self,
+        *,
+        client_user_id: str,
+        month: str,
+        protected_balance: float | None = None,
+        money_destinations: list[MoneyDestinationSnapshot] | None = None,
+    ) -> DashboardSummaryResponse:
+        month_year, month_month, month_value, is_historical = _parse_dashboard_month(
+            month
+        )
+        if not is_historical:
+            raise ValueError("Only completed months can be finalized as snapshots.")
+
+        summary = self._build_dashboard_summary(
+            client_user_id=client_user_id,
+            protected_balance=protected_balance,
+            month_year=month_year,
+            month_month=month_month,
+            month_value=month_value,
+            is_historical=True,
+            money_destinations=money_destinations,
+        )
+        saved = self.snapshot_store.save_snapshot(
+            client_user_id=client_user_id,
+            month=month_value,
+            summary=summary,
+        )
+        logger.info(
+            "dashboard snapshot finalized client_user_id=%s month=%s",
+            client_user_id,
+            month_value,
+        )
+        return saved
+
+    def list_snapshot_months(self, *, client_user_id: str) -> list[str]:
+        return self.snapshot_store.list_snapshot_months(client_user_id=client_user_id)
+
+    def _build_dashboard_summary(
+        self,
+        *,
+        client_user_id: str,
+        protected_balance: float | None,
+        month_year: int,
+        month_month: int,
+        month_value: str,
+        is_historical: bool,
+        money_destinations: list[MoneyDestinationSnapshot] | None = None,
     ) -> DashboardSummaryResponse:
         case_study = get_case_study_dashboard(
             client_user_id=client_user_id,
             protected_balance=protected_balance or PROTECTED_BALANCE_DEFAULT,
+            month=month_value,
+            is_historical=is_historical,
         )
         if case_study:
             return case_study
@@ -58,26 +145,45 @@ class DashboardService:
         recurring_bucket_by_transaction_id = _recurring_bucket_by_transaction_id(
             recurring_streams
         )
-        current_month_transactions = [
+        month_transactions = [
             transaction
             for transaction in transactions
-            if _is_current_month(transaction.get("date"))
+            if _is_in_month(transaction.get("date"), month_year, month_month)
         ]
 
+        all_posted_transactions = [
+            self._normalize_transaction(
+                transaction,
+                recurring_bucket_by_transaction_id.get(transaction["transaction_id"]),
+            )
+            for transaction in transactions
+        ]
         posted_transactions = [
             self._normalize_transaction(
                 transaction,
                 recurring_bucket_by_transaction_id.get(transaction["transaction_id"]),
             )
-            for transaction in current_month_transactions
+            for transaction in month_transactions
         ]
-        current_month_transaction_ids = {
+        month_transaction_ids = {
             transaction["transaction_id"]
-            for transaction in current_month_transactions
+            for transaction in month_transactions
         }
-        upcoming_recurring_totals = _upcoming_recurring_totals(
-            recurring_streams,
-            current_month_transaction_ids,
+        upcoming_recurring_totals = (
+            {
+                INCOME: 0.0,
+                HOUSING: 0.0,
+                EXPENSES: 0.0,
+                SUBSCRIPTIONS: 0.0,
+                TRANSFER: 0.0,
+            }
+            if is_historical
+            else _upcoming_recurring_totals(
+                recurring_streams,
+                month_transaction_ids,
+                month_year=month_year,
+                month_month=month_month,
+            )
         )
 
         income_posted_total = _posted_total(posted_transactions, INCOME)
@@ -108,20 +214,29 @@ class DashboardService:
         )
         protected_balance = protected_balance or PROTECTED_BALANCE_DEFAULT
 
-        liabilities = self._get_credit_card_liabilities(client_user_id)
-        if not liabilities:
-            liabilities = _fallback_liabilities_from_accounts(
-                [account.model_dump() for account in accounts_response.accounts]
+        if is_historical:
+            timeline = build_historical_timeline(
+                checking_balance=checking_balance,
+                protected_balance=protected_balance,
+                all_posted_transactions=all_posted_transactions,
+                month_year=month_year,
+                month_month=month_month,
             )
-        liabilities = _dedupe_liabilities(liabilities)
-        timeline = build_cashflow_timeline(
-            checking_balance=checking_balance,
-            protected_balance=protected_balance,
-            recurring_streams=recurring_streams,
-            liabilities=liabilities,
-            posted_transactions=posted_transactions,
-            current_month_transaction_ids=current_month_transaction_ids,
-        )
+        else:
+            liabilities = self._get_credit_card_liabilities(client_user_id)
+            if not liabilities:
+                liabilities = _fallback_liabilities_from_accounts(
+                    [account.model_dump() for account in accounts_response.accounts]
+                )
+            liabilities = _dedupe_liabilities(liabilities)
+            timeline = build_cashflow_timeline(
+                checking_balance=checking_balance,
+                protected_balance=protected_balance,
+                recurring_streams=recurring_streams,
+                liabilities=liabilities,
+                posted_transactions=posted_transactions,
+                current_month_transaction_ids=month_transaction_ids,
+            )
         projected_month_end_balance = timeline.projected_end_balance
         safe_to_move_amount = round(
             max(0, projected_month_end_balance - protected_balance),
@@ -129,10 +244,11 @@ class DashboardService:
         )
 
         logger.info(
-            "dashboard summary client_user_id=%s fetched_transactions=%s current_month_transactions=%s",
+            "dashboard summary client_user_id=%s month=%s fetched_transactions=%s month_transactions=%s",
             client_user_id,
+            month_value,
             len(transactions),
-            len(current_month_transactions),
+            len(month_transactions),
         )
         logger.info(
             "dashboard recurring client_user_id=%s active_streams=%s upcoming_totals=%s",
@@ -161,6 +277,9 @@ class DashboardService:
         )
 
         return DashboardSummaryResponse(
+            month=month_value,
+            is_historical=is_historical,
+            snapshot_source="computed" if is_historical else "live",
             checking_balance=checking_balance,
             income_total=income_total,
             housing_total=housing_total,
@@ -186,12 +305,19 @@ class DashboardService:
             lowest_projected_balance=timeline.lowest_projected_balance,
             lowest_projected_balance_date=timeline.lowest_projected_balance_date,
             transactions=posted_transactions,
-            recurring_streams=_upcoming_streams_for_month(
-                recurring_streams,
-                current_month_transaction_ids,
+            recurring_streams=(
+                []
+                if is_historical
+                else _upcoming_streams_for_month(
+                    recurring_streams,
+                    month_transaction_ids,
+                    month_year=month_year,
+                    month_month=month_month,
+                )
             ),
             credit_card_obligations=timeline.credit_card_obligations,
             cash_flow_events=timeline.cash_flow_events,
+            money_destinations=money_destinations,
         )
 
     def _normalize_transaction(
@@ -251,7 +377,10 @@ class DashboardService:
 
 
 def get_dashboard_service(settings: Settings = Depends(get_settings)) -> DashboardService:
-    return DashboardService(PlaidService(settings))
+    return DashboardService(
+        plaid_service=PlaidService(settings),
+        snapshot_store=DashboardSnapshotStore(settings.plaid_storage_path),
+    )
 
 
 def _posted_total(transactions: list[NormalizedTransaction], bucket: str) -> float:
@@ -276,7 +405,30 @@ def _find_checking_balance(accounts: list[dict]) -> float:
     return round(total, 2)
 
 
-def _is_current_month(value: str | None) -> bool:
+def _parse_dashboard_month(
+    month: str | None,
+) -> tuple[int, int, str, bool]:
+    today = date.today()
+
+    if not month:
+        return today.year, today.month, f"{today.year:04d}-{today.month:02d}", False
+
+    try:
+        year_text, month_text = month.split("-", 1)
+        month_year = int(year_text)
+        month_month = int(month_text)
+    except ValueError as exc:
+        raise ValueError("month must use YYYY-MM format") from exc
+
+    if month_month < 1 or month_month > 12:
+        raise ValueError("month must use a valid calendar month")
+
+    month_value = f"{month_year:04d}-{month_month:02d}"
+    is_historical = (month_year, month_month) < (today.year, today.month)
+    return month_year, month_month, month_value, is_historical
+
+
+def _is_in_month(value: str | None, year: int, month: int) -> bool:
     if not value:
         return False
 
@@ -285,8 +437,7 @@ def _is_current_month(value: str | None) -> bool:
     except ValueError:
         return False
 
-    today = date.today()
-    return transaction_date.year == today.year and transaction_date.month == today.month
+    return transaction_date.year == year and transaction_date.month == month
 
 
 def _normalize_recurring_stream(stream: dict) -> RecurringStream:
@@ -351,6 +502,9 @@ def _stream_already_posted_this_month(
 def _upcoming_recurring_totals(
     streams: list[RecurringStream],
     current_month_transaction_ids: set[str],
+    *,
+    month_year: int,
+    month_month: int,
 ) -> dict[str, float]:
     totals = {
         INCOME: 0.0,
@@ -363,7 +517,7 @@ def _upcoming_recurring_totals(
     for stream in streams:
         if stream.bucket not in UPCOMING_RECURRING_BUCKETS:
             continue
-        if not _is_current_month(stream.predicted_next_date):
+        if not _is_in_month(stream.predicted_next_date, month_year, month_month):
             continue
         if _stream_already_posted_this_month(stream, current_month_transaction_ids):
             continue
@@ -379,12 +533,15 @@ def _upcoming_recurring_totals(
 def _upcoming_streams_for_month(
     streams: list[RecurringStream],
     current_month_transaction_ids: set[str],
+    *,
+    month_year: int,
+    month_month: int,
 ) -> list[RecurringStream]:
     return [
         stream
         for stream in streams
         if stream.bucket in UPCOMING_RECURRING_BUCKETS
-        and _is_current_month(stream.predicted_next_date)
+        and _is_in_month(stream.predicted_next_date, month_year, month_month)
         and not _stream_already_posted_this_month(stream, current_month_transaction_ids)
     ]
 

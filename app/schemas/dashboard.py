@@ -60,7 +60,23 @@ class CashFlowEvent(BaseModel):
     source: str
 
 
+class MoneyDestinationSnapshot(BaseModel):
+    id: str
+    name: str
+    percent: float
+    icon: str
+
+
+class FinalizeDashboardSnapshotRequest(BaseModel):
+    protected_balance: float | None = None
+    money_destinations: list[MoneyDestinationSnapshot] | None = None
+
+
 class DashboardSummaryResponse(BaseModel):
+    month: str | None = None
+    is_historical: bool = False
+    snapshot_source: str = "live"
+    snapshot_finalized_at: str | None = None
     checking_balance: float
     income_total: float
     housing_total: float
@@ -86,3 +102,8 @@ class DashboardSummaryResponse(BaseModel):
     recurring_streams: list[RecurringStream] = []
     credit_card_obligations: list[CreditCardObligation] = []
     cash_flow_events: list[CashFlowEvent] = []
+    money_destinations: list[MoneyDestinationSnapshot] | None = None
+
+
+class DashboardSnapshotMonthsResponse(BaseModel):
+    months: list[str]
