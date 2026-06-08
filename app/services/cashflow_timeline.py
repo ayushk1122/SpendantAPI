@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -275,3 +276,107 @@ def _parse_date(value: str | None) -> date | None:
 
 def _is_current_month(value: date, today: date) -> bool:
     return value.year == today.year and value.month == today.month
+
+
+def build_historical_timeline(
+    *,
+    checking_balance: float,
+    protected_balance: float,
+    all_posted_transactions: list[NormalizedTransaction],
+    month_year: int,
+    month_month: int,
+) -> TimelineSummary:
+    month_start = date(month_year, month_month, 1)
+    month_end = month_start.replace(
+        day=calendar.monthrange(month_year, month_month)[1]
+    )
+    net_from_month_start = _net_flow_since(
+        all_posted_transactions,
+        since=month_start,
+    )
+    starting_balance = checking_balance - net_from_month_start
+
+    month_transactions = [
+        transaction
+        for transaction in all_posted_transactions
+        if _is_in_month(transaction.date, month_year, month_month)
+    ]
+    events = [
+        CashFlowEvent(
+            date=transaction.date,
+            amount=_transaction_signed_amount(transaction),
+            bucket=transaction.bucket,
+            label=transaction.merchant_name or transaction.name,
+            account_id=transaction.account_id,
+            source="posted",
+        )
+        for transaction in month_transactions
+    ]
+
+    events_by_day: dict[date, list[CashFlowEvent]] = defaultdict(list)
+    for event in events:
+        event_date = _parse_date(event.date)
+        if event_date:
+            events_by_day[event_date].append(event)
+
+    balance = starting_balance
+    lowest_balance = balance
+    lowest_date: date | None = month_start
+    current_day = month_start
+
+    while current_day <= month_end:
+        for event in events_by_day.get(current_day, []):
+            balance += event.amount
+
+        if balance < lowest_balance:
+            lowest_balance = balance
+            lowest_date = current_day
+
+        current_day += timedelta(days=1)
+
+    month_end_balance = balance
+    safe_to_move_amount = round(max(0, month_end_balance - protected_balance), 2)
+
+    return TimelineSummary(
+        cash_flow_events=sorted(events, key=lambda event: (event.date, event.label)),
+        credit_card_obligations=[],
+        projected_end_balance=round(month_end_balance, 2),
+        safe_to_move_today=safe_to_move_amount,
+        lowest_projected_balance=round(lowest_balance, 2),
+        lowest_projected_balance_date=lowest_date.isoformat() if lowest_date else None,
+    )
+
+
+def _transaction_signed_amount(transaction: NormalizedTransaction) -> float:
+    if transaction.bucket == INCOME:
+        return abs(transaction.amount)
+
+    return -abs(transaction.amount)
+
+
+def _net_flow_since(
+    transactions: list[NormalizedTransaction],
+    *,
+    since: date,
+    until: date | None = None,
+) -> float:
+    total = 0.0
+
+    for transaction in transactions:
+        transaction_date = _parse_date(transaction.date)
+        if not transaction_date or transaction_date < since:
+            continue
+        if until and transaction_date > until:
+            continue
+
+        total += _transaction_signed_amount(transaction)
+
+    return total
+
+
+def _is_in_month(value: str | None, year: int, month: int) -> bool:
+    transaction_date = _parse_date(value)
+    if not transaction_date:
+        return False
+
+    return transaction_date.year == year and transaction_date.month == month
