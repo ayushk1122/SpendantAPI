@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.dependencies import resolve_client_user_id
 from app.schemas.dashboard import (
     DashboardSnapshotMonthsResponse,
     DashboardSummaryResponse,
@@ -12,7 +13,7 @@ router = APIRouter()
 
 @router.get("/summary")
 def get_dashboard_summary(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     protected_balance: float | None = Query(default=None),
     month: str | None = Query(
         default=None,
@@ -30,12 +31,12 @@ def get_dashboard_summary(
 
 @router.post("/snapshots/finalize")
 def finalize_dashboard_snapshot(
-    client_user_id: str = Query(default="spendant-local-user"),
     month: str = Query(
         pattern=r"^\d{4}-\d{2}$",
         description="Completed month to finalize in YYYY-MM format.",
     ),
     request: FinalizeDashboardSnapshotRequest = Body(default_factory=FinalizeDashboardSnapshotRequest),
+    client_user_id: str = Depends(resolve_client_user_id),
     dashboard_service: DashboardService = Depends(get_dashboard_service),
 ) -> DashboardSummaryResponse:
     try:
@@ -51,7 +52,7 @@ def finalize_dashboard_snapshot(
 
 @router.get("/snapshots/months")
 def get_dashboard_snapshot_months(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     dashboard_service: DashboardService = Depends(get_dashboard_service),
 ) -> DashboardSnapshotMonthsResponse:
     return DashboardSnapshotMonthsResponse(

@@ -1,10 +1,19 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.utilities.client_user_id import InvalidClientUserIDError, normalize_client_user_id
 
 PlaidCountryCode = Literal["US"]
 PlaidProduct = Literal["transactions", "liabilities"]
+
+
+def _validated_client_user_id(value: str) -> str:
+    try:
+        return normalize_client_user_id(value)
+    except InvalidClientUserIDError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 class CreateLinkTokenRequest(BaseModel):
@@ -15,6 +24,11 @@ class CreateLinkTokenRequest(BaseModel):
         default_factory=lambda: ["transactions", "liabilities"]
     )
     country_codes: list[PlaidCountryCode] = Field(default_factory=lambda: ["US"])
+
+    @field_validator("client_user_id")
+    @classmethod
+    def validate_client_user_id(cls, value: str) -> str:
+        return _validated_client_user_id(value)
 
 
 class CreateLinkTokenResponse(BaseModel):
@@ -30,6 +44,11 @@ class ExchangePublicTokenRequest(BaseModel):
     client_user_id: str = Field(default="spendant-local-user")
     institution_id: str | None = None
     institution_name: str | None = None
+
+    @field_validator("client_user_id")
+    @classmethod
+    def validate_client_user_id(cls, value: str) -> str:
+        return _validated_client_user_id(value)
 
 
 class ExchangePublicTokenResponse(BaseModel):

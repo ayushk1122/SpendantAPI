@@ -503,6 +503,8 @@ class PlaidService:
     def _plaid_host(self) -> str:
         if self.environment == "production":
             return plaid.Environment.Production
+        if self.environment == "development":
+            return "https://development.plaid.com"
 
         return plaid.Environment.Sandbox
 

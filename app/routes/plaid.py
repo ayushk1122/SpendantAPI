@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends
 
+from app.dependencies import resolve_client_user_id
 from app.schemas.plaid import (
     AccountsResponse,
     BalancesResponse,
@@ -33,7 +34,7 @@ def exchange_public_token(
 
 @router.get("/items")
 def get_items(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> PlaidItemsResponse:
     return plaid_service.get_items(client_user_id)
@@ -42,7 +43,7 @@ def get_items(
 @router.delete("/items/{item_id}")
 def delete_item(
     item_id: str,
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> dict[str, str]:
     plaid_service.delete_item(client_user_id, item_id)
@@ -51,7 +52,7 @@ def delete_item(
 
 @router.get("/accounts")
 def get_accounts(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> AccountsResponse:
     return plaid_service.get_accounts(client_user_id)
@@ -59,7 +60,7 @@ def get_accounts(
 
 @router.get("/transactions")
 def get_transactions(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> TransactionsResponse:
     return plaid_service.get_transactions(client_user_id)
@@ -67,7 +68,7 @@ def get_transactions(
 
 @router.get("/balances")
 def get_balances(
-    client_user_id: str = Query(default="spendant-local-user"),
+    client_user_id: str = Depends(resolve_client_user_id),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> BalancesResponse:
     return plaid_service.get_balances(client_user_id)

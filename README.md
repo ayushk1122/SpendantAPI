@@ -43,14 +43,38 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Update `.env` with your Plaid credentials:
+Update `.env` with your Plaid credentials and environment settings:
 
 ```bash
 PLAID_CLIENT_ID=your_plaid_client_id
 PLAID_SECRET=your_plaid_secret
 PLAID_ENV=sandbox
 PLAID_STORAGE_PATH=data/plaid.sqlite3
+APP_ENV=local
+LOG_LEVEL=INFO
+DEFAULT_CLIENT_USER_ID=spendant-local-user
 ```
+
+### Environment tiers
+
+| Variable | Values | Purpose |
+|---|---|---|
+| `APP_ENV` | `local`, `staging`, `production` | Backend deployment tier |
+| `PLAID_ENV` | `sandbox`, `development`, `production` | Plaid API environment |
+| `LOG_LEVEL` | e.g. `INFO`, `DEBUG` | Logging verbosity |
+| `DEFAULT_CLIENT_USER_ID` | string | Dev fallback when clients omit `client_user_id` |
+| `CORS_ORIGINS` | comma-separated URLs | Optional browser CORS allowlist |
+| `API_PUBLIC_BASE_URL` | URL | Optional public API URL for future webhooks/redirects |
+
+For local development:
+
+```bash
+APP_ENV=local
+PLAID_ENV=sandbox
+DEFAULT_CLIENT_USER_ID=spendant-local-user
+```
+
+For staging/production, use the matching `APP_ENV`, HTTPS `API_PUBLIC_BASE_URL`, and the appropriate `PLAID_ENV`.
 
 Supported `PLAID_ENV` values are `sandbox`, `development`, and `production`.
 `PLAID_STORAGE_PATH` stores linked Plaid Items locally for development.
