@@ -4,10 +4,9 @@ FastAPI backend foundation for Spendant, an iPhone cash-flow planning app focuse
 
 > Tell me how much I can safely spend, save, and invest this month.
 
-This project currently includes the local API foundation, a Plaid service boundary,
-real Plaid sandbox calls, and local development storage for linked Plaid Items. It
-does not include authentication, user accounts, production-grade token storage, or
-Plaid webhooks yet.
+This project includes the local API foundation, a Plaid service boundary,
+real Plaid sandbox calls, managed JWT authentication for staging/production,
+encrypted Plaid token storage, Plaid webhooks, and Postgres-ready migrations.
 
 ## Project Structure
 
@@ -64,7 +63,15 @@ DEFAULT_CLIENT_USER_ID=spendant-local-user
 | `LOG_LEVEL` | e.g. `INFO`, `DEBUG` | Logging verbosity |
 | `DEFAULT_CLIENT_USER_ID` | string | Dev fallback when clients omit `client_user_id` |
 | `CORS_ORIGINS` | comma-separated URLs | Optional browser CORS allowlist |
-| `API_PUBLIC_BASE_URL` | URL | Optional public API URL for future webhooks/redirects |
+| `API_PUBLIC_BASE_URL` | URL | Public API URL for Plaid webhooks (required in production) |
+| `DATABASE_URL` | Postgres URL | Optional managed Postgres URL; defaults to SQLite at `PLAID_STORAGE_PATH` |
+| `TOKEN_ENCRYPTION_KEY` | string | Symmetric key material for encrypting Plaid access tokens at rest |
+| `TOKEN_KEY_VERSION` | string | Active encryption key version label |
+| `AUTH_REQUIRED` | `true`/`false` | Require Bearer JWT auth (defaults to `true` outside `local`) |
+| `AUTH_ISSUER` | URL | Managed auth issuer |
+| `AUTH_AUDIENCE` | string | Expected JWT audience |
+| `AUTH_JWKS_URL` | URL | JWKS endpoint for JWT validation |
+| `AUTH_USER_ID_CLAIM` | string | JWT claim used as Spendant user id (default `sub`) |
 
 For local development:
 
@@ -107,7 +114,68 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+Readiness check:
+
+```bash
+curl http://127.0.0.1:8000/health/ready
+```
+
 Create a Plaid link token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/plaid/create-link-token \
+  -H "Content-Type: application/json" \
+  -d '{"client_user_id":"spendant-local-user"}'
+```
+
+Exchange a Plaid public token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/plaid/exchange-public-token \
+  -H "Content-Type: application/json" \
+  -d '{"public_token":"public-sandbox-token","client_user_id":"spendant-local-user"}'
+```
+
+Get dashboard summary:
+
+```bash
+curl "http://127.0.0.1:8000/api/dashboard/summary?client_user_id=spendant-local-user"
+```
+
+## Production Deployment
+
+Build and run with Docker:
+
+```bash
+docker build -t spendant-api .
+docker run --env-file .env -p 8000:8000 spendant-api
+```
+
+Required production/staging secrets:
+
+```bash
+APP_ENV=production
+PLAID_ENV=production
+API_PUBLIC_BASE_URL=https://api.spendant.app
+DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/spendant
+TOKEN_ENCRYPTION_KEY=...
+AUTH_ISSUER=https://your-auth-provider/
+AUTH_AUDIENCE=spendant-api
+AUTH_JWKS_URL=https://your-auth-provider/.well-known/jwks.json
+PLAID_CLIENT_ID=...
+PLAID_SECRET=...
+```
+
+Apply Postgres schema migrations:
+
+```bash
+alembic upgrade head
+```
+
+Protected routes require `Authorization: Bearer <jwt>` outside local development.
+The iOS app stores the session token in Keychain and attaches it automatically.
+
+## Environment Errors
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/plaid/create-link-token \
@@ -125,10 +193,8 @@ curl -X POST http://127.0.0.1:8000/api/plaid/exchange-public-token \
   -d '{"public_token":"public-sandbox-token","client_user_id":"local-user"}'
 ```
 
-This stores the returned Plaid access token in local SQLite storage for later account,
-balance, and transaction calls. You can optionally pass `institution_id` and
-`institution_name` from the Plaid Link success callback; otherwise the backend
-resolves institution metadata from Plaid.
+This stores the Plaid Item server-side with an encrypted access token. The API
+response does not include the raw Plaid access token.
 
 List linked institutions:
 
@@ -261,21 +327,15 @@ If required variables are missing or invalid, the app raises a clear configurati
 Implemented:
 
 - FastAPI app initialization
-- `GET /health`
-- Real Plaid link token creation
-- Real Plaid public token exchange
-- Local SQLite storage for linked Plaid Items
+- `GET /health` and `GET /health/ready`
+- Managed JWT authentication for staging/production
+- Real Plaid link token creation with webhook registration
+- Real Plaid public token exchange with encrypted token storage
+- Local SQLite storage for linked Plaid Items (Postgres-ready via Alembic)
 - Real Plaid accounts, balances, and transaction sync endpoints
+- Plaid webhook endpoint with idempotent event storage
 - Multi-bank support: multiple Plaid Items per user with institution metadata
 - Dashboard summary endpoint with rule-based Spendant buckets
-- Plaid personal finance category storage for synced transactions
-- Plaid service boundary
+- Structured request logging and stable API error codes
+- Docker image and GitHub Actions CI
 - Environment-based configuration
-- Local setup documentation
-
-Not implemented yet:
-
-- Production-grade encrypted token storage
-- Authentication
-- User accounts
-- Plaid webhooks

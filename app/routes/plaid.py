@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Body, Depends
 
-from app.dependencies import resolve_client_user_id
+from app.auth.models import AuthenticatedUser
+from app.dependencies import get_authenticated_user, resolve_client_user_id
 from app.schemas.plaid import (
     AccountsResponse,
     BalancesResponse,
@@ -19,17 +20,21 @@ router = APIRouter()
 @router.post("/create-link-token")
 def create_link_token(
     request: CreateLinkTokenRequest = Body(default_factory=CreateLinkTokenRequest),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> CreateLinkTokenResponse:
-    return plaid_service.create_link_token(request)
+    scoped_request = request.model_copy(update={"client_user_id": user.user_id})
+    return plaid_service.create_link_token(scoped_request)
 
 
 @router.post("/exchange-public-token")
 def exchange_public_token(
     request: ExchangePublicTokenRequest,
+    user: AuthenticatedUser = Depends(get_authenticated_user),
     plaid_service: PlaidService = Depends(get_plaid_service),
 ) -> ExchangePublicTokenResponse:
-    return plaid_service.exchange_public_token(request)
+    scoped_request = request.model_copy(update={"client_user_id": user.user_id})
+    return plaid_service.exchange_public_token(scoped_request)
 
 
 @router.get("/items")

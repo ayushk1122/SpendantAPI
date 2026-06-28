@@ -45,6 +45,7 @@ def main() -> int:
         print("created sandbox public token")
 
     check("health", request_json("GET", f"{args.base_url}/health"))
+    check("health ready", request_json("GET", f"{args.base_url}/health/ready"))
     link_token = request_json(
         "POST",
         f"{args.base_url}/api/plaid/create-link-token",
@@ -65,7 +66,9 @@ def main() -> int:
             "client_user_id": args.client_user_id,
         },
     )
-    check("exchange public token", exchange, required=["access_token", "item_id"])
+    check("exchange public token", exchange, required=["item_id"])
+    if "access_token" in exchange:
+        raise RuntimeError("exchange response must not include access_token")
 
     if args.link_second_institution:
         second_token = create_sandbox_public_token(args.second_institution_id)
@@ -81,8 +84,10 @@ def main() -> int:
         check(
             "exchange second public token",
             second_exchange,
-            required=["access_token", "item_id"],
+            required=["item_id"],
         )
+        if "access_token" in second_exchange:
+            raise RuntimeError("exchange response must not include access_token")
         if second_exchange["item_id"] == exchange["item_id"]:
             raise RuntimeError("second institution exchange returned the same item_id")
 
