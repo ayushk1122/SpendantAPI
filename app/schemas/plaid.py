@@ -52,7 +52,6 @@ class ExchangePublicTokenRequest(BaseModel):
 
 
 class ExchangePublicTokenResponse(BaseModel):
-    access_token: str
     item_id: str
     institution_id: str | None = None
     institution_name: str | None = None

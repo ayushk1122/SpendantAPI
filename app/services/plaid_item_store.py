@@ -9,7 +9,8 @@ from pathlib import Path
 class PlaidItem:
     item_id: str
     client_user_id: str
-    access_token: str
+    encrypted_access_token: str
+    token_key_version: str
     institution_id: str | None
     institution_name: str | None
     transactions_cursor: str | None
@@ -24,7 +25,8 @@ class PlaidItemStore:
     def save_item(
         self,
         client_user_id: str,
-        access_token: str,
+        encrypted_access_token: str,
+        token_key_version: str,
         item_id: str,
         institution_id: str | None = None,
         institution_name: str | None = None,
@@ -36,6 +38,8 @@ class PlaidItemStore:
                 INSERT INTO plaid_items (
                     item_id,
                     client_user_id,
+                    encrypted_access_token,
+                    token_key_version,
                     access_token,
                     institution_id,
                     institution_name,
@@ -43,10 +47,12 @@ class PlaidItemStore:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?)
                 ON CONFLICT(item_id) DO UPDATE SET
                     client_user_id = excluded.client_user_id,
-                    access_token = excluded.access_token,
+                    encrypted_access_token = excluded.encrypted_access_token,
+                    token_key_version = excluded.token_key_version,
+                    access_token = NULL,
                     institution_id = excluded.institution_id,
                     institution_name = excluded.institution_name,
                     updated_at = excluded.updated_at
@@ -54,7 +60,8 @@ class PlaidItemStore:
                 (
                     item_id,
                     client_user_id,
-                    access_token,
+                    encrypted_access_token,
+                    token_key_version,
                     institution_id,
                     institution_name,
                     now,
@@ -65,7 +72,8 @@ class PlaidItemStore:
         return PlaidItem(
             item_id=item_id,
             client_user_id=client_user_id,
-            access_token=access_token,
+            encrypted_access_token=encrypted_access_token,
+            token_key_version=token_key_version,
             institution_id=institution_id,
             institution_name=institution_name,
             transactions_cursor=None,
@@ -78,7 +86,8 @@ class PlaidItemStore:
                 SELECT
                     item_id,
                     client_user_id,
-                    access_token,
+                    encrypted_access_token,
+                    token_key_version,
                     institution_id,
                     institution_name,
                     transactions_cursor
@@ -98,7 +107,8 @@ class PlaidItemStore:
                 SELECT
                     item_id,
                     client_user_id,
-                    access_token,
+                    encrypted_access_token,
+                    token_key_version,
                     institution_id,
                     institution_name,
                     transactions_cursor
@@ -112,6 +122,40 @@ class PlaidItemStore:
             return None
 
         return self._row_to_item(row)
+
+    def get_client_user_id_for_item(self, item_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT client_user_id
+                FROM plaid_items
+                WHERE item_id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["client_user_id"]
+
+    def delete_transactions(
+        self,
+        *,
+        client_user_id: str,
+        transaction_ids: list[str],
+    ) -> None:
+        if not transaction_ids:
+            return
+
+        placeholders = ", ".join("?" for _ in transaction_ids)
+        with self._connect() as connection:
+            connection.execute(
+                f"""
+                DELETE FROM plaid_transactions
+                WHERE client_user_id = ?
+                  AND transaction_id IN ({placeholders})
+                """,
+                (client_user_id, *transaction_ids),
+            )
 
     def delete_item(self, client_user_id: str, item_id: str) -> bool:
         with self._connect() as connection:
@@ -331,10 +375,20 @@ class PlaidItemStore:
         ]
 
     def _row_to_item(self, row: sqlite3.Row) -> PlaidItem:
+        encrypted = row["encrypted_access_token"]
+        key_version = row["token_key_version"]
+        if not encrypted:
+            legacy_token = row["access_token"]
+            if not legacy_token:
+                raise ValueError(f"Plaid item '{row['item_id']}' is missing token data.")
+            encrypted = legacy_token
+            key_version = key_version or "legacy-plaintext"
+
         return PlaidItem(
             item_id=row["item_id"],
             client_user_id=row["client_user_id"],
-            access_token=row["access_token"],
+            encrypted_access_token=encrypted,
+            token_key_version=key_version,
             institution_id=row["institution_id"],
             institution_name=row["institution_name"],
             transactions_cursor=row["transactions_cursor"],
@@ -350,7 +404,9 @@ class PlaidItemStore:
                 CREATE TABLE IF NOT EXISTS plaid_items (
                     item_id TEXT PRIMARY KEY,
                     client_user_id TEXT NOT NULL,
-                    access_token TEXT NOT NULL,
+                    encrypted_access_token TEXT,
+                    token_key_version TEXT,
+                    access_token TEXT,
                     institution_id TEXT,
                     institution_name TEXT,
                     transactions_cursor TEXT,
@@ -401,6 +457,10 @@ class PlaidItemStore:
             self._ensure_column(connection, "plaid_transactions", "item_id", "TEXT")
             self._ensure_column(connection, "plaid_items", "institution_id", "TEXT")
             self._ensure_column(connection, "plaid_items", "institution_name", "TEXT")
+            self._ensure_column(connection, "plaid_items", "encrypted_access_token", "TEXT")
+            self._ensure_column(connection, "plaid_items", "token_key_version", "TEXT")
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA busy_timeout=5000")
 
     def _needs_legacy_migration(self, connection: sqlite3.Connection) -> bool:
         table = connection.execute(

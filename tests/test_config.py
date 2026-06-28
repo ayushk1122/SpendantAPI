@@ -19,11 +19,15 @@ def test_settings_parse_environment_values() -> None:
             "PLAID_ENV": "sandbox",
             "CORS_ORIGINS": "http://localhost:3000, https://staging.spendant.app",
             "API_PUBLIC_BASE_URL": "https://staging-api.spendant.app",
+            "AUTH_ISSUER": "https://auth.example.com/",
+            "AUTH_AUDIENCE": "spendant-api",
+            "AUTH_JWKS_URL": "https://auth.example.com/.well-known/jwks.json",
         }
     )
 
     assert settings.app_env == "staging"
     assert settings.log_level == "DEBUG"
+    assert settings.auth_required is True
     assert settings.default_client_user_id == "spendant-local-user"
     assert settings.cors_origin_list == [
         "http://localhost:3000",

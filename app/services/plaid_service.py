@@ -10,6 +10,7 @@ from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdReques
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.liabilities_get_request import LiabilitiesGetRequest
+from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.personal_finance_category_version import PersonalFinanceCategoryVersion
@@ -40,6 +41,7 @@ from app.schemas.plaid import (
     TransactionsResponse,
 )
 from app.services.plaid_item_store import PlaidItem, PlaidItemStore
+from app.services.token_vault import TokenVault
 
 
 class ExternalServiceError(RuntimeError):
@@ -52,20 +54,28 @@ class PlaidItemNotFoundError(RuntimeError):
 
 class PlaidService:
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.client_id = settings.plaid_client_id
         self.secret = settings.plaid_secret
         self.environment = settings.plaid_env
         self.item_store = PlaidItemStore(settings.plaid_storage_path)
+        self.token_vault = TokenVault(settings)
         self.client = self._build_client()
 
     def create_link_token(self, request: CreateLinkTokenRequest) -> CreateLinkTokenResponse:
-        plaid_request = LinkTokenCreateRequest(
-            client_name=request.client_name,
-            language=request.language,
-            country_codes=[CountryCode(code) for code in request.country_codes],
-            user=LinkTokenCreateRequestUser(client_user_id=request.client_user_id),
-            products=[Products(product) for product in request.products],
-        )
+        request_kwargs = {
+            "client_name": request.client_name,
+            "language": request.language,
+            "country_codes": [CountryCode(code) for code in request.country_codes],
+            "user": LinkTokenCreateRequestUser(client_user_id=request.client_user_id),
+            "products": [Products(product) for product in request.products],
+        }
+        if self.settings.api_public_base_url:
+            request_kwargs["webhook"] = (
+                f"{self.settings.api_public_base_url.rstrip('/')}/api/plaid/webhook"
+            )
+
+        plaid_request = LinkTokenCreateRequest(**request_kwargs)
 
         try:
             response = self.client.link_token_create(plaid_request).to_dict()
@@ -105,9 +115,11 @@ class PlaidService:
             institution_id = institution_id or resolved_id
             institution_name = institution_name or resolved_name
 
+        encrypted_access_token, key_version = self.token_vault.encrypt(access_token)
         item = self.item_store.save_item(
             client_user_id=request.client_user_id,
-            access_token=access_token,
+            encrypted_access_token=encrypted_access_token,
+            token_key_version=key_version,
             item_id=item_id,
             institution_id=institution_id,
             institution_name=institution_name,
@@ -116,7 +128,6 @@ class PlaidService:
         return ExchangePublicTokenResponse(
             mock=False,
             environment=self.environment,
-            access_token=item.access_token,
             item_id=item.item_id,
             institution_id=item.institution_id,
             institution_name=item.institution_name,
@@ -131,7 +142,7 @@ class PlaidService:
             account_count = 0
             try:
                 accounts_response = self.client.accounts_get(
-                    AccountsGetRequest(access_token=item.access_token)
+                    AccountsGetRequest(access_token=self._access_token_for_item(item))
                 ).to_dict()
                 account_count = len(accounts_response.get("accounts", []))
             except ApiException:
@@ -149,10 +160,43 @@ class PlaidService:
         return PlaidItemsResponse(items=summaries, mock=False)
 
     def delete_item(self, client_user_id: str, item_id: str) -> None:
+        item = self.item_store.get_item(client_user_id, item_id)
+        if item is None:
+            raise PlaidItemNotFoundError(
+                f"No Plaid item '{item_id}' is linked for client_user_id '{client_user_id}'."
+            )
+
+        try:
+            self.client.item_remove(
+                ItemRemoveRequest(access_token=self._access_token_for_item(item))
+            )
+        except ApiException as exc:
+            raise ExternalServiceError(
+                f"Plaid item removal failed: {self._format_plaid_error(exc)}"
+            ) from exc
+
         deleted = self.item_store.delete_item(client_user_id, item_id)
         if not deleted:
             raise PlaidItemNotFoundError(
                 f"No Plaid item '{item_id}' is linked for client_user_id '{client_user_id}'."
+            )
+
+    def sync_transactions_for_item(self, *, client_user_id: str, item_id: str) -> None:
+        item = self.item_store.get_item(client_user_id, item_id)
+        if item is None:
+            raise PlaidItemNotFoundError(
+                f"No Plaid item '{item_id}' is linked for client_user_id '{client_user_id}'."
+            )
+
+        added, modified, removed, next_cursor, _request_id = self._sync_item_transactions(item)
+        if next_cursor is not None:
+            self.item_store.save_transaction_sync(
+                client_user_id=client_user_id,
+                item_id=item.item_id,
+                added=added,
+                modified=modified,
+                removed=removed,
+                cursor=next_cursor,
             )
 
     def get_accounts(self, client_user_id: str) -> AccountsResponse:
@@ -164,7 +208,7 @@ class PlaidService:
         for item in items:
             try:
                 response = self.client.accounts_get(
-                    AccountsGetRequest(access_token=item.access_token)
+                    AccountsGetRequest(access_token=self._access_token_for_item(item))
                 ).to_dict()
             except ApiException as exc:
                 raise ExternalServiceError(
@@ -238,7 +282,7 @@ class PlaidService:
             try:
                 response = self.client.transactions_recurring_get(
                     TransactionsRecurringGetRequest(
-                        access_token=item.access_token,
+                        access_token=self._access_token_for_item(item),
                         options=TransactionsRecurringGetRequestOptions(
                             include_personal_finance_category=True,
                             personal_finance_category_version=PersonalFinanceCategoryVersion("v2"),
@@ -268,7 +312,7 @@ class PlaidService:
         for item in items:
             try:
                 accounts_response = self.client.accounts_get(
-                    AccountsGetRequest(access_token=item.access_token)
+                    AccountsGetRequest(access_token=self._access_token_for_item(item))
                 ).to_dict()
             except ApiException:
                 accounts_response = {"accounts": []}
@@ -281,7 +325,7 @@ class PlaidService:
 
             try:
                 response = self.client.liabilities_get(
-                    LiabilitiesGetRequest(access_token=item.access_token)
+                    LiabilitiesGetRequest(access_token=self._access_token_for_item(item))
                 ).to_dict()
             except ApiException as exc:
                 error_text = self._format_plaid_error(exc)
@@ -341,7 +385,7 @@ class PlaidService:
         for item in items:
             try:
                 response = self.client.accounts_get(
-                    AccountsGetRequest(access_token=item.access_token)
+                    AccountsGetRequest(access_token=self._access_token_for_item(item))
                 ).to_dict()
             except ApiException as exc:
                 raise ExternalServiceError(
@@ -371,7 +415,7 @@ class PlaidService:
 
         while has_more:
             request_kwargs = {
-                "access_token": item.access_token,
+                "access_token": self._access_token_for_item(item),
                 "count": 500,
                 "options": TransactionsSyncRequestOptions(
                     include_personal_finance_category=True,
@@ -406,6 +450,14 @@ class PlaidService:
             has_more = response["has_more"]
 
         return added, modified, removed, next_cursor, request_id
+
+    def _access_token_for_item(self, item: PlaidItem) -> str:
+        if item.token_key_version == "legacy-plaintext":
+            return item.encrypted_access_token
+        return self.token_vault.decrypt(
+            item.encrypted_access_token,
+            item.token_key_version,
+        )
 
     def _resolve_institution_metadata(
         self,

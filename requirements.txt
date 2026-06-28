@@ -4,4 +4,8 @@ python-dotenv
 plaid-python
 pydantic
 pydantic-settings
-
+PyJWT[crypto]
+cryptography
+sqlalchemy
+psycopg2-binary
+alembic
